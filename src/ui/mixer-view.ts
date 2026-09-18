@@ -147,6 +147,7 @@ export class MixerView {
     const updaters: (() => void)[] = [];
 
     const trim = knob('TRIM', {
+      // Set automatically on load; this is the manual override.
       min: -12, max: 12, getValue: () => dj.store.deck(id).trim,
       onChange: (v) => dj.setTrim(id, v), defaultValue: 0,
       format: (v) => `${v > 0 ? '+' : ''}${v.toFixed(1)}`,
@@ -185,7 +186,7 @@ export class MixerView {
 
     const pfl = button('CUE', {
       class: 'pfl-btn',
-      title: 'Pre-fader listen on the headphone output',
+      title: 'Listen to this deck in headphones only, before anyone else hears it',
       onclick: () => dj.togglePfl(id),
     });
 

@@ -1,19 +1,82 @@
 # DJ Console
 
-A local-first DJ console that runs in the browser. Two decks with a real
-sample-accurate audio engine, automatic track analysis, tempo and phase sync
-that actually holds, a full mixer, an FX rack, a sampler, a track library and
-master recording.
+A DJ app that runs on your own computer. Add some songs, press one button, and
+it mixes them for you — matching their speed, lining up their beats, and
+choosing where the two songs fit together best.
 
-Your music never leaves the machine. There are no network requests after the
-page loads, no accounts, and no cloud analysis.
+Your music never leaves the machine. No accounts, no uploads, no cloud.
 
 ```
 npm install
-npm run dev          # http://localhost:5173
+npm run dev          # then open http://localhost:5173
 ```
 
-![The console with two tracks loaded and deck B synced to deck A](docs/console.png)
+---
+
+## Just want it to DJ for you?
+
+That is the default. You get one screen:
+
+![Simple mode: add music, press the button, it mixes](docs/simple.png)
+
+1. **Add your music.** Choose files, choose a folder, or drag them anywhere
+   onto the page.
+2. **Press the big button.** That is it.
+
+It listens to every song first — working out its speed, where the beats are,
+what key it is in, and which parts are loud, quiet, building or dropping. Then
+it starts one playing, picks a good song to follow it, and blends them at the
+moment they fit together best.
+
+While it runs it tells you what it is doing in plain English:
+
+> Playing "First Song". Blending into "Second Song" in 0:58 — leaving at the
+> outro, starting the next track where its intro ends, over about 30 seconds.
+
+Three buttons are there if you want them: **blend now** (don't wait), **skip**,
+and **stop**. Everything else is optional.
+
+### How it decides where to join two songs
+
+Not "fade out at the end". It scores every sensible pairing of *leave the old
+song here* and *start the new song there*, using what the analysis found:
+
+- **Leave late, and leave calm.** It wants to play most of a song, and to mix
+  out where things are winding down — an outro or a quiet passage — rather than
+  in the middle of a drop.
+- **Come in where the song starts.** Usually right where the incoming track's
+  intro hands over, so you don't throw away the first minute of it.
+- **Match the energy.** Two moments at a similar level blend invisibly. A
+  slight lift is good — that's how a set builds. A big drop kills the room.
+- **Land on a phrase.** Both points snap to 16-bar boundaries, so the join
+  happens where the music expects a change.
+- **Pick the technique to suit.** Speeds too far apart to blend cleanly → cut
+  over quickly. A drop arriving just after the join → build into it. Two calm,
+  compatible tracks → a long, slow blend. Otherwise swap the bass across so the
+  two kick drums never fight.
+
+Every choice comes back as a sentence you can read, not a number.
+
+---
+
+## Want the actual DJ console?
+
+Press **Show the full DJ console**, or cycle the button in the top bar:
+**SIMPLE → CONSOLE → ADVANCED**. The music keeps playing the whole time.
+
+![The full console with two tracks loaded and deck B synced to deck A](docs/console.png)
+
+There is a **Help** button in the top bar that explains every control in plain
+language — including the one everybody asks about:
+
+> **SYNC** speeds the deck up or slows it down to match the other one, then
+> nudges it so its beats land exactly on top of the other track's beats.
+> Without it, the two drum patterns drift apart within seconds and it sounds
+> like a stumble.
+>
+> It says **SYNCING** while it is still pulling them into line, and **SYNCED**
+> only once they are actually locked. The number next to **PHASE** is the real
+> error, in milliseconds.
 
 ---
 
@@ -188,7 +251,7 @@ npm run verify    # typecheck + unit tests + production build
 npm test          # unit tests only
 ```
 
-**174 unit tests.** The worklet tests are not a reimplementation — they load
+**208 unit tests.** The worklet tests are not a reimplementation — they load
 `public/worklets/deck-processor.js`, the exact file the browser runs, into a
 stubbed `AudioWorkletGlobalScope` and render real blocks through it. They cover
 the no-drift invariant at five playback rates, pitch preservation under key
@@ -199,23 +262,40 @@ The sync tests simulate two decks whose playheads advance at whatever rate the
 controller sets, and assert that it converges, stays locked over five simulated
 minutes, recovers from a shove, and never seeks to fix a small error.
 
-**End-to-end browser test:**
+**End-to-end browser tests.** Two of them, both driving the real built app in
+Chromium:
 
 ```
 npm run build
 npm run preview          # terminal 1
-npm run smoke            # terminal 2
+npm run smoke            # terminal 2 - the full console
+npm run smoke:simple     # terminal 2 - the one-button path
 ```
 
-This boots the built app in Chromium, generates two WAVs at 124 and 128 BPM,
-runs them through the real import and analysis path, plays both decks, engages
-sync, and asserts on what the engine reports. A typical run:
+`smoke` generates two WAVs at 124 and 128 BPM, runs them through the real
+import and analysis path, plays both decks, engages sync, and asserts on what
+the engine reports:
 
 ```
 crossOriginIsolated: true
 ANALYSIS: 123.96 BPM (conf 1.00, A minor) · 127.96 BPM (conf 1.00, E minor)
 SYNC: master A, locked, phase -0.36 ms, B pitched 127.96 -> 123.96
 FEATURES: loop 1.9361084220716354 s (expected 1.936108422071636)
+ALL CHECKS PASSED
+```
+
+`smoke:simple` does what a first-time user does — lands on the page, adds three
+songs, presses the one button — and checks that the console started a track,
+queued the next one, matched its tempo, chose a join point late in the outgoing
+track, and explained itself in a sentence. It then forces the blend and
+confirms both decks are playing and beat-locked:
+
+```
+LANDING: mode=simple, console hidden, button disabled until music is added
+AFTER PRESS: playing [A], loaded [A,B], both at 125.99 BPM, auto mixing on
+  "Blending into Second Song in 0:58 - leaving at the outro..."
+PLAN: eq, exit 61.9s of 100s, entry 31.9s, 30s blend
+BLEND: both decks playing, locked, phase 0.02 ms
 ALL CHECKS PASSED
 ```
 
@@ -249,6 +329,10 @@ Things worth knowing before you rely on them.
 - **Web MIDI is Chromium and Edge only** at present.
 - **Everything lives in this browser's IndexedDB.** Clearing site data clears
   the library. There is no export yet beyond recorded mixes.
+- **Auto DJ picks from what you have given it.** It scores tracks on tempo,
+  key, energy and your ratings, and avoids anything played recently — but it
+  has no idea what the room wants. If it keeps choosing something you dislike,
+  rate it down or remove it.
 
 ## Cross-origin isolation
 

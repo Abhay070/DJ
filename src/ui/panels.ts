@@ -27,8 +27,9 @@ export class TopBar {
   constructor(dj: DjConsole, auto: AutoDj, onOpen: (panel: string) => void) {
     this.dj = dj;
 
-    this.recBtn = button('● REC', {
+    this.recBtn = button('● Record', {
       class: 'rec-btn',
+      title: 'Record everything you hear to a file you can keep',
       onclick: () => (dj.store.state.recording ? dj.stopRecording() : dj.startRecording()),
     });
     this.recTime = el('span', { class: 'rec-time', text: '' });
@@ -53,16 +54,24 @@ export class TopBar {
       el('option', { value: 'autodj', text: 'AUTO DJ' }),
     ]);
 
-    const uiModeBtn = button('PERFORMANCE', {
+    // Simple -> the one-button view. Performance -> the console. Advanced ->
+    // the console plus the technical surface.
+    const MODES = ['simple', 'performance', 'advanced'] as const;
+    const MODE_LABELS = { simple: 'SIMPLE', performance: 'CONSOLE', advanced: 'ADVANCED' } as const;
+    const uiModeBtn = button(MODE_LABELS[dj.store.state.uiMode], {
       class: 'ui-mode-btn',
-      title: 'Switch between the stripped-back performance layout and the full one',
+      title: 'Simple: one button, it does the mixing. Console: the decks. Advanced: everything.',
       onclick: () => {
-        const next = dj.store.state.uiMode === 'performance' ? 'advanced' : 'performance';
+        const i = MODES.indexOf(dj.store.state.uiMode);
+        const next = MODES[(i + 1) % MODES.length];
         dj.store.state.uiMode = next;
         document.body.dataset.uiMode = next;
-        uiModeBtn.textContent = next.toUpperCase();
+        uiModeBtn.textContent = MODE_LABELS[next];
         dj.store.notify('mode');
       },
+    });
+    dj.store.subscribe('mode', () => {
+      uiModeBtn.textContent = MODE_LABELS[dj.store.state.uiMode];
     });
 
     this.root = el('header', { class: 'topbar' }, [
@@ -79,10 +88,11 @@ export class TopBar {
       this.latencyEl,
       this.recTime,
       this.recBtn,
-      button('Assistant', { class: 'secondary-btn', onclick: () => onOpen('assistant') }),
-      button('Session', { class: 'secondary-btn', onclick: () => onOpen('session') }),
+      button('Help', { class: 'secondary-btn help-btn', title: 'What all these buttons do', onclick: () => onOpen('help') }),
+      button('Assistant', { class: 'secondary-btn console-only', onclick: () => onOpen('assistant') }),
+      button('Session', { class: 'secondary-btn console-only', onclick: () => onOpen('session') }),
       button('Settings', { class: 'secondary-btn', onclick: () => onOpen('settings') }),
-      button('Debug', { class: 'secondary-btn', onclick: () => onOpen('debug') }),
+      button('Debug', { class: 'secondary-btn console-only', onclick: () => onOpen('debug') }),
     ]);
 
     dj.store.subscribe('recording', () => this.renderSlow());
@@ -92,7 +102,7 @@ export class TopBar {
   private renderSlow() {
     const s = this.dj.store.state;
     setClass(this.recBtn, 'active', s.recording);
-    setText(this.recBtn, s.recording ? '■ STOP' : '● REC');
+    setText(this.recBtn, s.recording ? '■ Stop recording' : '● Record');
     setText(this.queueEl, s.analysisQueue > 0 ? `Analysing ${s.analysisQueue}` : '');
     setClass(this.queueEl, 'visible', s.analysisQueue > 0);
   }
@@ -522,6 +532,130 @@ export function buildAssistant(dj: DjConsole, assistant: Assistant, auto: AutoDj
       button('Refresh suggestions', { class: 'secondary-btn', onclick: refreshSuggestions }),
     ]),
     suggestions,
+  ]);
+}
+
+// --------------------------------------------------------------------- help
+
+/**
+ * Plain-language explanations of the console.
+ *
+ * Written for someone who has never DJed. Every entry says what the control
+ * does and, where it matters, why you would want it - not what it is called on
+ * a Pioneer.
+ */
+interface HelpEntry { name: string; what: string; why?: string }
+
+const HELP: { group: string; blurb?: string; entries: HelpEntry[] }[] = [
+  {
+    group: 'The big idea',
+    blurb:
+      'Two songs play at once, on the two "decks". Your job is to bring the ' +
+      'second one in while the first one is on its way out, so the music never ' +
+      'stops. Everything else is in service of that.',
+    entries: [
+      { name: 'Deck A and Deck B', what: 'The two players, one on each side. Each holds one song.' },
+      { name: 'The crossfader', what: 'The slider along the bottom of the mixer. Left means you hear deck A, right means deck B, middle means both.' },
+      { name: 'Simple mode', what: 'The one-button view. It picks the songs, finds where they fit together, and blends them for you.', why: 'Use it until the rest makes sense. You can switch at any time without the music stopping.' },
+    ],
+  },
+  {
+    group: 'SYNC - the one everybody asks about',
+    blurb:
+      'Two songs almost never run at the same speed, and even at the same ' +
+      'speed their beats rarely land together. SYNC fixes both, so the two ' +
+      'tracks sound like one piece of music instead of two arguing.',
+    entries: [
+      {
+        name: 'What it does',
+        what: 'Speeds the deck up or slows it down to match the other one, then nudges it so its beats land exactly on top of the other track\'s beats.',
+        why: 'Without it, the two drum patterns drift apart within seconds and it sounds like a stumble.',
+      },
+      {
+        name: 'The MASTER label',
+        what: 'The deck everything else follows. Change its speed and the synced deck follows automatically.',
+        why: 'It picks itself: whichever deck started playing first.',
+      },
+      {
+        name: 'SYNCING vs SYNCED',
+        what: 'SYNCING means it is still pulling the beats into line. SYNCED means they are locked together.',
+        why: 'It only says SYNCED when it really is - the number next to PHASE is the actual error in milliseconds.',
+      },
+      {
+        name: 'PHASE',
+        what: 'How far apart the two tracks\' beats are, in milliseconds. Zero in the middle is perfect.',
+      },
+    ],
+  },
+  {
+    group: 'Playing a track',
+    entries: [
+      { name: 'PLAY / PAUSE', what: 'Starts and stops that deck.' },
+      { name: 'CUE', what: 'Sets a starting point, and jumps back to it. Hold it to preview from there, let go to jump back.', why: 'It is how you find the spot you want to start a song from.' },
+      { name: 'The big wheel', what: 'Drag it to scrub through the track like a record. Hold and move it slowly to nudge the timing by hand.' },
+      { name: 'The slider on the right', what: 'Speed. Up is faster, down is slower. Double-click to reset it.' },
+      { name: 'KEY LOCK', what: 'Keeps voices sounding normal when you change the speed.', why: 'Leave it on. Without it, speeding a track up makes it sound like a chipmunk.' },
+    ],
+  },
+  {
+    group: 'The mixer, in the middle',
+    entries: [
+      { name: 'The vertical sliders', what: 'Volume for each deck.' },
+      { name: 'HIGH / MID / LOW', what: 'Turn parts of the sound up or down - treble, voices, bass.', why: 'The classic move: turn LOW down on the outgoing track so the two basslines do not fight.' },
+      { name: 'H / M / L buttons', what: 'Cut that part out completely, in one press.' },
+      { name: 'FILTER', what: 'Sweeps the sound thin and then back. Left removes treble, right removes bass.' },
+      { name: 'TRIM', what: 'Evens out songs that were mastered at different volumes. It is set automatically when you load a track.' },
+      { name: 'CUE (on the mixer)', what: 'Listen to that deck in headphones only, before the audience hears it.' },
+      { name: 'The coloured bars', what: 'How loud each channel is. Staying out of the red keeps things clean.' },
+      { name: 'PANIC', what: 'Stops absolutely everything, immediately.' },
+    ],
+  },
+  {
+    group: 'Performance pads',
+    entries: [
+      { name: 'HOT CUES 1-8', what: 'Bookmarks in the song. Press one to save the spot, press it again to jump there. Shift-click clears it.' },
+      { name: 'AUTO LOOP', what: 'Repeats a chunk of the song forever. The numbers are how many beats long.', why: 'Handy for stretching an intro while you get the next track ready.' },
+      { name: 'LOOP ROLL', what: 'Hold for a stutter effect. Let go and the song carries on where it would have been.' },
+      { name: 'BEAT JUMP', what: 'Skip forward or back by a set number of beats, staying in time.' },
+      { name: 'QUANT', what: 'Snaps everything you press to the nearest beat, so you cannot be slightly off.', why: 'Leave it on while you are learning.' },
+      { name: 'SLIP', what: 'Whatever you do, the song keeps running underneath. Let go and it is where it should be.' },
+    ],
+  },
+  {
+    group: 'Effects and extras',
+    entries: [
+      { name: 'PERFORMANCE FX', what: 'Hold a pad for an effect, let go to stop. Echo and filter are the safest to start with.' },
+      { name: 'The FX knobs', what: 'WET is how much of the effect you hear. A and B change how it sounds.' },
+      { name: 'SAMPLER', what: 'Drop short sounds onto the pads and fire them over the music.' },
+      { name: 'Record', what: 'Saves everything you hear to a file on your computer when you press stop.' },
+      { name: 'Session', what: 'Saves where everything is - tracks, cue points, loops - so you can come back to it.' },
+    ],
+  },
+];
+
+export function buildHelp(dj: DjConsole, onSimpleMode: () => void): HTMLElement {
+  const sections = HELP.map((group) =>
+    el('section', { class: 'help-group' }, [
+      el('h3', { text: group.group }),
+      group.blurb ? el('p', { class: 'help-blurb', text: group.blurb }) : null,
+      ...group.entries.map((entry) =>
+        el('div', { class: 'help-entry' }, [
+          el('span', { class: 'help-name', text: entry.name }),
+          el('span', { class: 'help-what', text: entry.what }),
+          entry.why ? el('span', { class: 'help-why', text: entry.why }) : null,
+        ])),
+    ]),
+  );
+
+  return el('div', { class: 'help' }, [
+    el('p', { class: 'help-intro' }, [
+      'New to this? You do not need any of it. ',
+    ]),
+    button('Take me back to the one-button version', {
+      class: 'primary-btn',
+      onclick: () => { onSimpleMode(); dj.store.toast('Simple mode', 'info', { detail: 'Press the big button and it does the rest.' }); },
+    }),
+    ...sections,
   ]);
 }
 

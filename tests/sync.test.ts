@@ -351,6 +351,68 @@ describe('phase alignment on engage', () => {
   });
 });
 
+describe('starting a deck already in phase', () => {
+  it('shifts the requested start onto the master beat', () => {
+    const { a, b, sync } = makeDecks(128, 128);
+    a.play();
+    a.position = 10.31;
+
+    const wanted = 32.17;
+    const aligned = sync.alignedStartPosition('B', wanted);
+
+    // The adjustment is small - it only moves to the nearest in-phase point.
+    expect(Math.abs(aligned - wanted)).toBeLessThanOrEqual(2 * (60 / 128) + 1e-9);
+
+    // And starting there really is in phase with the master.
+    const beatA = beatAt(a.grid, a.position);
+    const beatB = beatAt(b.grid, aligned);
+    const diff = Math.abs(beatA - beatB);
+    expect(Math.abs(diff - Math.round(diff))).toBeLessThan(1e-6);
+  });
+
+  it('means the controller has almost nothing left to correct', () => {
+    const { a, b, sync } = makeDecks(128, 124);
+    a.play();
+    a.position = 20.37;
+
+    // Cue the follower where the transition planner asked for, adjusted.
+    b.position = sync.alignedStartPosition('B', 41.83);
+    b.play();
+    sync.enable('B');
+
+    // One controller tick, not six seconds of pulling in.
+    runFrames(sync, [a, b], 0.2);
+    expect(Math.abs(sync.statusFor('B').phaseError)).toBeLessThan(0.02);
+  });
+
+  it('locks almost immediately from an aligned start', () => {
+    const { a, b, sync } = makeDecks(128, 124);
+    a.play();
+    a.position = 20.37;
+    b.position = sync.alignedStartPosition('B', 41.83);
+    b.play();
+    sync.enable('B');
+    runFrames(sync, [a, b], 1.5);
+    expect(sync.statusFor('B').locked).toBe(true);
+  });
+
+  it('leaves the position alone when there is no master playing', () => {
+    const { sync } = makeDecks(128, 124);
+    expect(sync.alignedStartPosition('B', 12.34)).toBe(12.34);
+  });
+
+  it('never pushes the start outside the track', () => {
+    const { a, b, sync } = makeDecks(128, 128);
+    a.play();
+    a.position = 10;
+    b.duration = 100;
+    // Right at the very end, where an adjustment could overshoot.
+    const aligned = sync.alignedStartPosition('B', 99.9);
+    expect(aligned).toBeGreaterThanOrEqual(0);
+    expect(aligned).toBeLessThanOrEqual(100);
+  });
+});
+
 describe('quantised scheduling', () => {
   it('returns the next beat boundary ahead of the given time', () => {
     const { a, sync } = makeDecks(128, 124);

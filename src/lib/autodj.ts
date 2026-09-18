@@ -13,6 +13,10 @@ import type { DjConsole } from '../state/console';
 import type { DeckId, Track } from '../lib/types';
 import { keyCompatibility } from './music';
 import { tempoRatio } from './grid';
+import {
+  findBestTransition, describeTransition, formatCountdown, energyAt,
+  type TransitionPoint,
+} from './transition-points';
 
 export type TransitionStyle =
   | 'crossfade' | 'eq' | 'filter' | 'echo-out' | 'drop' | 'long-blend' | 'quick-cut';
@@ -42,8 +46,22 @@ export interface TransitionPlan {
   duration: number;
   /** Track-time on the outgoing deck at which it should begin. */
   startAt: number;
+  /** Track-time the incoming deck is cued to. */
+  entryAt: number;
   steps: TransitionStep[];
   reasoning: string[];
+  /** One sentence a beginner can read. */
+  summary: string;
+}
+
+/** What the console is doing right now, for the simple view to render. */
+export interface AutoStatus {
+  state: 'idle' | 'playing' | 'waiting' | 'mixing';
+  headline: string;
+  detail: string;
+  /** Seconds until the next blend, when one is scheduled. */
+  countdown?: number;
+  nextTitle?: string;
 }
 
 export interface CandidateScore {
@@ -60,6 +78,11 @@ export class AutoDj {
   private timers: number[] = [];
   private running: TransitionPlan | null = null;
   private pollTimer: number | null = null;
+  /** The blend that is lined up but not started yet. */
+  private pending: TransitionPlan | null = null;
+  /** Guards against two overlapping async plan/load passes. */
+  private planning = false;
+  private warnedEmpty = false;
 
   /** Bars of lead-in before the outgoing track's outro. */
   leadBars = 16;
@@ -128,7 +151,15 @@ export class AutoDj {
    * Build a transition plan. Nothing is executed until `run` is called, so the
    * plan can be shown to the user first.
    */
-  plan(from: DeckId, to: DeckId, style: TransitionStyle = this.style): TransitionPlan | null {
+  /**
+   * Work out where and how to join the two loaded decks.
+   *
+   * With no style given, both the join point and the technique are chosen
+   * automatically from what the analyser found - which is what "do it for me"
+   * has to mean. Passing a style overrides the technique but still uses the
+   * best join point.
+   */
+  plan(from: DeckId, to: DeckId, style?: TransitionStyle): TransitionPlan | null {
     const dj = this.dj;
     const outDeck = dj.engine.deck(from);
     const inDeck = dj.engine.deck(to);
@@ -136,42 +167,64 @@ export class AutoDj {
 
     const reasoning: string[] = [];
     const beatSeconds = outDeck.currentBpm > 0 ? 60 / outDeck.currentBpm : 0.5;
+    const phraseBeats = dj.store.state.settings.phraseBeats;
 
-    // Length, in bars, scaled to the style.
-    const bars = style === 'quick-cut' ? 0 : style === 'long-blend' ? 32 : style === 'drop' ? 8 : 16;
-    const duration = Math.max(0.15, bars * 4 * beatSeconds);
+    // ---- find the best place to join --------------------------------------
+    let point: TransitionPoint | null = null;
+    if (outDeck.analysis && inDeck.analysis) {
+      point = findBestTransition(
+        { analysis: outDeck.analysis, grid: outDeck.grid, duration: outDeck.duration },
+        { analysis: inDeck.analysis, grid: inDeck.grid, duration: inDeck.duration },
+        { position: outDeck.position, phraseBeats },
+      );
+    }
 
-    // Where to begin: the outgoing outro if we found one, else near the end.
-    const outAnalysis = outDeck.analysis;
     let startAt: number;
-    if (outAnalysis && outAnalysis.outroStart > 0 && outAnalysis.outroStart < outDeck.duration) {
-      startAt = outAnalysis.outroStart;
-      const outro = outAnalysis.sections.find((s) => s.label === 'outro');
-      reasoning.push(outro && outro.confidence > 0.5
-        ? `Outgoing outro detected at ${formatSeconds(startAt)}`
-        : `Using the last section as an outro (low confidence)`);
-    } else {
-      startAt = Math.max(0, outDeck.duration - duration - 8);
-      reasoning.push('No clear outro found; starting a fixed distance from the end');
-    }
-    // Land it on a phrase boundary so the blend lines up musically.
-    startAt = Math.max(0, Math.min(outDeck.duration - 1, dj.nextPhraseOn(from) > startAt ? startAt : startAt));
+    let entryAt: number;
+    let duration: number;
 
-    // Where the incoming track should be cued from.
-    const inAnalysis = inDeck.analysis;
-    if (inAnalysis && inAnalysis.introEnd > 0) {
-      reasoning.push(`Incoming intro runs to ${formatSeconds(inAnalysis.introEnd)}`);
+    if (point) {
+      startAt = point.exitAt;
+      entryAt = point.entryAt;
+      duration = point.blendSeconds;
+      reasoning.push(...point.reasons);
+    } else {
+      // No usable grid or analysis: fall back to a plain blend near the end
+      // rather than refusing to mix.
+      duration = 16 * 4 * beatSeconds;
+      startAt = Math.max(outDeck.position + 5, outDeck.duration - duration - 5);
+      entryAt = 0;
+      reasoning.push('no beat grid on one of these tracks, so this is a straight blend');
     }
+
+    // ---- choose the technique ---------------------------------------------
+    const chosen = style ?? this.chooseStyle(from, to, startAt, entryAt);
+    if (!style) reasoning.push(this.explainStyle(chosen));
+
+    // A quick cut is not a blend, and a drop transition wants to be short.
+    if (chosen === 'quick-cut') duration = Math.max(0.15, beatSeconds);
+    else if (chosen === 'long-blend') duration = Math.max(duration, 32 * 4 * beatSeconds);
+    else if (chosen === 'drop') duration = Math.min(duration, 8 * 4 * beatSeconds);
+
+    const fromTitle = this.titleOf(from);
+    const toTitle = this.titleOf(to);
+    const summary = point
+      ? describeTransition({ ...point, blendSeconds: duration }, fromTitle, toTitle)
+      : `Blending "${fromTitle}" into "${toTitle}" over about ${Math.round(duration)} seconds.`;
 
     const steps: TransitionStep[] = [];
     const set = (fn: () => void, at: number, label: string) => steps.push({ at, label, run: fn });
 
-    // Every style starts the incoming deck, synced, at the top.
+    // Every style starts the incoming deck at its chosen entry point, matched
+    // in tempo and beat-aligned to the deck already playing.
     set(() => {
-      inDeck.seek(0);
-      dj.toggleSync(to);
+      // Work out the in-phase start position *before* seeking, so the deck is
+      // beat-matched from its first sample instead of being dragged into
+      // place by the controller over the next few seconds.
+      if (!dj.sync.isEnabled(to)) dj.toggleSync(to);
+      inDeck.seek(dj.sync.alignedStartPosition(to, entryAt));
       dj.play(to);
-    }, 0, `Start deck ${to}, synced to deck ${from}`);
+    }, 0, `Start deck ${to}, matched to deck ${from}`);
 
     const ramp = (fn: (t: number) => void, label: string, count = 24) => {
       for (let i = 0; i <= count; i++) {
@@ -179,10 +232,9 @@ export class AutoDj {
       }
     };
 
-    switch (style) {
+    switch (chosen) {
       case 'quick-cut':
         set(() => { dj.setCrossfader(to === 'B' ? 1 : -1); dj.pause(from); }, 0.05, 'Cut straight across');
-        reasoning.push('Quick cut: no blend, for incompatible or high-energy changes');
         break;
 
       case 'crossfade':
@@ -223,14 +275,17 @@ export class AutoDj {
         break;
 
       case 'drop':
-        reasoning.push('Aligns the incoming drop with the outgoing phrase boundary');
         set(() => {
-          const drop = inAnalysis?.sections.find((s) => s.label === 'drop');
-          if (drop && drop.confidence > 0.4) {
-            // Cue the incoming deck so its drop lands at the end of the blend.
-            inDeck.seek(Math.max(0, drop.start - duration));
+          // Back the entry point up so the incoming drop lands exactly as the
+          // blend finishes, rather than partway through it.
+          const drop = inDeck.analysis?.sections.find(
+            (sec) => sec.label === 'drop' && sec.start > entryAt && sec.confidence > 0.4,
+          );
+          if (drop) {
+            const want = Math.max(0, drop.start - duration);
+            inDeck.seek(dj.sync.alignedStartPosition(to, want));
           }
-        }, 0, 'Cue the incoming drop');
+        }, 0, 'Line the drop up with the end of the blend');
         ramp((t) => {
           dj.setEq(from, 'low', lerp(0, -26, t));
           dj.setCrossfader(lerp(-1, 1, to === 'B' ? t : 1 - t));
@@ -243,7 +298,6 @@ export class AutoDj {
           dj.setEq(from, 'low', lerp(0, -26, Math.min(1, t * 1.4)));
           dj.setEq(to, 'low', lerp(-26, 0, Math.min(1, t * 1.4)));
         }, 'Long blend with a gradual bass swap');
-        reasoning.push('32 bars: suited to steady, compatible material');
         break;
     }
 
@@ -256,7 +310,68 @@ export class AutoDj {
     }, duration + 0.2, `Stop deck ${from} and reset its channel`);
 
     steps.sort((a, b) => a.at - b.at);
-    return { style, from, to, duration, startAt, steps, reasoning };
+    return { style: chosen, from, to, duration, startAt, entryAt, steps, reasoning, summary };
+  }
+
+  private titleOf(deckId: DeckId): string {
+    const id = this.dj.engine.deck(deckId).trackId;
+    return (id && this.dj.store.state.tracks.get(id)?.title) || `deck ${deckId}`;
+  }
+
+  /**
+   * Pick the mixing technique from what the two tracks are doing.
+   *
+   * A beginner should never have to know what a "filter transition" is to get
+   * a good result, so this makes the call the same way a DJ would: how far
+   * apart are the tempos, do the keys clash, and is there a big jump in energy
+   * at the join?
+   */
+  chooseStyle(from: DeckId, to: DeckId, exitAt: number, entryAt: number): TransitionStyle {
+    const dj = this.dj;
+    const outDeck = dj.engine.deck(from);
+    const inDeck = dj.engine.deck(to);
+    const outA = outDeck.analysis;
+    const inA = inDeck.analysis;
+    if (!outA || !inA) return 'crossfade';
+
+    const stretch = Math.abs(tempoRatio(inDeck.grid.bpm, outDeck.currentBpm) - 1);
+    const keyScore = keyCompatibility(outA.key, inA.key);
+    const energyOut = energyAt(outA, exitAt);
+    const energyIn = energyAt(inA, entryAt);
+    const jump = energyIn - energyOut;
+
+    // Too much stretch or a clashing key means a long blend will sound wrong
+    // however carefully it is done. Get it over with.
+    if (stretch > 0.09) return 'quick-cut';
+    if (keyScore < 0.35 && stretch > 0.04) return 'echo-out';
+
+    // A drop arriving right after the join is worth building towards.
+    const dropAhead = inA.sections.find(
+      (sec) => sec.label === 'drop' && sec.start > entryAt && sec.start < entryAt + 45 && sec.confidence > 0.4,
+    );
+    if (dropAhead) return 'drop';
+
+    // A big lift needs the old track out of the way quickly.
+    if (jump > 0.28) return 'echo-out';
+
+    // Two calm, compatible tracks can take a long, slow blend.
+    if (energyOut < 0.55 && Math.abs(jump) < 0.15 && stretch < 0.03 && keyScore > 0.6) return 'long-blend';
+
+    // The workhorse: swap the bass so two kicks never fight.
+    return 'eq';
+  }
+
+  /** Why that technique, in words a beginner can use. */
+  explainStyle(style: TransitionStyle): string {
+    switch (style) {
+      case 'quick-cut': return 'their speeds are too far apart to blend, so this switches over quickly';
+      case 'echo-out': return 'the old track fades out on an echo to make room';
+      case 'drop': return 'timed so the new track\'s drop lands as the blend finishes';
+      case 'long-blend': return 'they suit each other, so this takes a long, slow blend';
+      case 'filter': return 'the old track is filtered away as the new one comes up';
+      case 'crossfade': return 'a straightforward fade between the two';
+      case 'eq': return 'the bass is swapped over so the two beats never muddy each other';
+    }
   }
 
   /** Execute a plan. Steps are scheduled relative to now. */
@@ -289,22 +404,183 @@ export class AutoDj {
 
   // ------------------------------------------------------------- auto mode
 
+  /**
+   * The one button.
+   *
+   * Works out what should happen next from whatever state the console is in,
+   * does it, and returns a sentence explaining what it did. Pressing it again
+   * is always safe.
+   *
+   *  - nothing playing  -> start the best track, queue and prepare the next
+   *  - one deck playing -> line up the next track and schedule the blend
+   *  - already mixing   -> say so and leave it alone
+   *
+   * Everything it does is a normal console action, so any control the user
+   * touches afterwards simply takes over.
+   */
+  async mixItForMe(): Promise<string> {
+    const dj = this.dj;
+
+    const ready = [...dj.store.state.tracks.values()].filter(
+      (t) => t.analysisState === 'done' && t.analysis,
+    );
+    if (!ready.length) {
+      const pending = dj.store.state.analysisQueue;
+      return pending > 0
+        ? `Still listening to your music - ${pending} track${pending === 1 ? '' : 's'} to go. Try again in a moment.`
+        : 'Add some music first, then press this again.';
+    }
+
+    if (this.inProgress) return 'Already mixing - sit back.';
+
+    const playing = dj.engine.deckIds.filter((id) => dj.engine.deck(id).playing);
+
+    // ---- nothing playing: start the set ------------------------------------
+    if (playing.length === 0) {
+      const first = this.pickOpener(ready);
+      const deckA = dj.engine.deckIds[0];
+      await dj.loadTrack(deckA, first.id, { force: true });
+      dj.setCrossfader(deckA === 'A' ? -1 : 1);
+      dj.play(deckA);
+      this.enable();
+      const next = await this.prepareNext(deckA);
+      return next
+        ? `Playing "${first.title}". Next up is "${next.title}" - I'll blend them automatically.`
+        : `Playing "${first.title}". Add another track and I'll mix into it.`;
+    }
+
+    // ---- two decks playing: let the running mix finish ----------------------
+    if (playing.length > 1) {
+      this.enable();
+      return 'Both tracks are playing - I\'ll take it from here.';
+    }
+
+    // ---- one deck playing: line up the blend --------------------------------
+    const from = playing[0];
+    const to = dj.engine.deckIds.find((id) => id !== from)!;
+    const prepared = dj.engine.deck(to).hasTrack ? null : await this.prepareNext(from);
+    if (!dj.engine.deck(to).hasTrack) {
+      this.enable();
+      return prepared
+        ? `Lined up "${prepared.title}".`
+        : 'Nothing suitable to play next yet - add a few more tracks.';
+    }
+
+    this.enable();
+    const plan = this.plan(from, to);
+    if (!plan) return 'I could not find a good place to blend these two.';
+
+    this.pending = plan;
+    const wait = plan.startAt - dj.engine.deck(from).position;
+    return wait > 1
+      ? `${plan.summary} Starting in ${formatCountdown(wait)}.`
+      : `${plan.summary} Starting now.`;
+  }
+
+  /**
+   * The first track of a set: the best-rated analysed track, preferring
+   * something that starts gently rather than dropping straight in.
+   */
+  private pickOpener(ready: Track[]): Track {
+    const scored = ready.map((t) => {
+      const a = t.analysis!;
+      const opensGently = a.sections[0]?.label === 'intro' ? 0.2 : 0;
+      const rating = t.rating > 0 ? t.rating / 5 : 0.5;
+      const unplayed = t.playCount === 0 ? 0.15 : 0;
+      return { t, score: rating * 0.6 + opensGently + unplayed };
+    });
+    scored.sort((a, b) => b.score - a.score);
+    return scored[0].t;
+  }
+
+  /**
+   * Load the best next track onto the free deck and match its tempo, so it is
+   * ready to go before the blend is due.
+   */
+  async prepareNext(fromDeck: DeckId): Promise<Track | null> {
+    const dj = this.dj;
+    const to = dj.engine.deckIds.find((id) => id !== fromDeck);
+    if (!to || dj.engine.deck(to).hasTrack) return null;
+
+    const candidates = this.suggest(fromDeck, 1);
+    if (!candidates.length) return null;
+
+    const track = candidates[0].track;
+    await dj.loadTrack(to, track.id, { force: true });
+    // Match tempo now so the deck is ready; phase is aligned when it starts.
+    if (!dj.sync.isEnabled(to)) dj.toggleSync(to);
+    return track;
+  }
+
+  /**
+   * Blend into the next track right now, instead of waiting for the planned
+   * moment. The join point is still chosen properly - only the timing changes.
+   */
+  async blendNow(): Promise<string> {
+    const dj = this.dj;
+    if (this.inProgress) return 'Already mixing.';
+
+    const playing = dj.engine.deckIds.filter((id) => dj.engine.deck(id).playing);
+    if (playing.length !== 1) return 'Start a track first.';
+    const from = playing[0];
+    const to = dj.engine.deckIds.find((id) => id !== from)!;
+
+    if (!dj.engine.deck(to).hasTrack) {
+      const next = await this.prepareNext(from);
+      if (!next) return 'Nothing queued up to blend into.';
+    }
+
+    const plan = this.plan(from, to);
+    if (!plan) return 'I could not work out how to blend these two.';
+    this.pending = null;
+    this.run(plan);
+    return `Blending into "${this.titleOf(to)}" now.`;
+  }
+
+  /**
+   * Jump straight to the next track. This is a cut, not a blend - it is what
+   * "skip" means, and pretending otherwise would just delay the music.
+   */
+  async skip(): Promise<string> {
+    const dj = this.dj;
+    const playing = dj.engine.deckIds.filter((id) => dj.engine.deck(id).playing);
+    if (!playing.length) return this.mixItForMe();
+    const from = playing[0];
+    const to = dj.engine.deckIds.find((id) => id !== from)!;
+
+    if (!dj.engine.deck(to).hasTrack) {
+      const next = await this.prepareNext(from);
+      if (!next) return 'Nothing else to play.';
+    }
+
+    const plan = this.plan(from, to, 'quick-cut');
+    if (!plan) return 'Could not skip.';
+    this.pending = null;
+    this.run(plan);
+    return `Skipping to "${this.titleOf(to)}".`;
+  }
+
+  /** Turn auto mixing on without the toast, for internal use. */
+  private enable() {
+    if (this.enabled) return;
+    this.start();
+  }
+
   start() {
     if (this.enabled) return;
     this.enabled = true;
     this.dj.store.state.mixMode = 'autodj';
     this.dj.store.notify('mode');
-    // Poll rather than schedule once: tempo and position can change under us.
-    this.pollTimer = setInterval(() => this.tick(), 1000) as unknown as number;
-    this.dj.store.toast('Auto DJ on', 'success', {
-      detail: 'It will load and mix the next track. Any control you touch stays yours.',
-    });
+    // Poll rather than schedule once: tempo, position and the plan itself can
+    // all change underneath us while we wait.
+    this.pollTimer = setInterval(() => void this.tick(), 500) as unknown as number;
   }
 
   stop() {
     this.enabled = false;
     if (this.pollTimer !== null) clearInterval(this.pollTimer);
     this.pollTimer = null;
+    this.pending = null;
     this.abort();
     if (this.dj.store.state.mixMode === 'autodj') {
       this.dj.store.state.mixMode = 'manual';
@@ -312,8 +588,50 @@ export class AutoDj {
     }
   }
 
+  /** What the console is doing, in a sentence a beginner can read. */
+  get status(): AutoStatus {
+    const dj = this.dj;
+    const playing = dj.engine.deckIds.filter((id) => dj.engine.deck(id).playing);
+
+    if (this.inProgress && this.running) {
+      return { state: 'mixing', headline: 'Mixing the two tracks together', detail: this.running.summary };
+    }
+    if (!playing.length) {
+      return { state: 'idle', headline: 'Nothing playing', detail: 'Press the big button to start.' };
+    }
+
+    const from = playing[0];
+    const nowTitle = this.titleOf(from);
+    if (this.pending) {
+      const wait = this.pending.startAt - dj.engine.deck(from).position;
+      return {
+        state: 'waiting',
+        headline: `Playing "${nowTitle}"`,
+        detail: `Blending into "${this.titleOf(this.pending.to)}" in ${formatCountdown(wait)} - ${this.pending.summary}`,
+        countdown: Math.max(0, wait),
+        nextTitle: this.titleOf(this.pending.to),
+      };
+    }
+
+    const to = dj.engine.deckIds.find((id) => id !== from);
+    const nextLoaded = to && dj.engine.deck(to).hasTrack;
+    return {
+      state: 'playing',
+      headline: `Playing "${nowTitle}"`,
+      detail: nextLoaded ? `"${this.titleOf(to!)}" is ready to come in.` : 'Working out what to play next.',
+      nextTitle: nextLoaded ? this.titleOf(to!) : undefined,
+    };
+  }
+
+  /**
+   * Keeps the set running. Called twice a second while auto mixing is on.
+   *
+   * Unlike a fixed "start blending N seconds from the end", this waits for the
+   * playhead to reach the join point the planner chose, so the blend happens
+   * at the musically right moment rather than a fixed distance from the end.
+   */
   private async tick() {
-    if (!this.enabled || this.inProgress) return;
+    if (!this.enabled || this.inProgress || this.planning) return;
     const dj = this.dj;
 
     const playing = dj.engine.deckIds.filter((id) => dj.engine.deck(id).playing);
@@ -323,27 +641,53 @@ export class AutoDj {
     if (!to) return;
 
     const outDeck = dj.engine.deck(from);
-    const beatSeconds = outDeck.currentBpm > 0 ? 60 / outDeck.currentBpm : 0.5;
-    const blendSeconds = this.style === 'quick-cut' ? 1 : (this.style === 'long-blend' ? 32 : 16) * 4 * beatSeconds;
-    const remaining = outDeck.duration - outDeck.position;
-    if (remaining > blendSeconds + 2) return;
-
-    // Load the next track if the incoming deck is empty.
     const inDeck = dj.engine.deck(to);
+
+    // Make sure something is queued up.
     if (!inDeck.hasTrack) {
-      const candidates = this.suggest(from, 1);
-      if (!candidates.length) {
-        dj.store.toast('Auto DJ has nothing to play next', 'warn', {
-          detail: 'Import more tracks, or make sure they have finished analysing.',
-        });
-        this.stop();
-        return;
+      this.planning = true;
+      try {
+        const next = await this.prepareNext(from);
+        if (!next) {
+          // Nothing to play next. Let the current track finish rather than
+          // stopping the music dead, and say why once.
+          if (!this.warnedEmpty) {
+            this.warnedEmpty = true;
+            dj.store.toast('Nothing left to play next', 'warn', {
+              detail: 'Add more music and I\'ll keep going.',
+            });
+          }
+          return;
+        }
+        this.warnedEmpty = false;
+      } finally {
+        this.planning = false;
       }
-      await dj.loadTrack(to, candidates[0].track.id, { force: true });
     }
 
-    const plan = this.plan(from, to, this.style);
-    if (plan) this.run(plan);
+    // Plan the blend once the next track is loaded, and refresh it while we
+    // wait in case the user moves the playhead or changes tempo.
+    if (!this.pending || this.pending.to !== to || this.pending.from !== from) {
+      this.pending = this.plan(from, to);
+      if (this.pending) this.dj.store.notify('mode');
+    } else if (this.pending.startAt < outDeck.position - 1) {
+      // The playhead moved past the planned join; replan from here.
+      this.pending = this.plan(from, to);
+    }
+
+    if (!this.pending) return;
+
+    // Fire when the playhead reaches the join point, or if we are running out
+    // of track and would otherwise miss it entirely.
+    const remaining = outDeck.duration - outDeck.position;
+    const reached = outDeck.position >= this.pending.startAt;
+    const nearlyOut = remaining <= this.pending.duration + 1;
+
+    if (reached || nearlyOut) {
+      const plan = this.pending;
+      this.pending = null;
+      this.run(plan);
+    }
   }
 }
 
@@ -354,9 +698,4 @@ function average(x: Float32Array): number {
   let s = 0;
   for (let i = 0; i < x.length; i++) s += x[i];
   return s / x.length;
-}
-
-function formatSeconds(s: number): string {
-  const m = Math.floor(s / 60);
-  return `${m}:${Math.floor(s % 60).toString().padStart(2, '0')}`;
 }

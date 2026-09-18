@@ -15,11 +15,15 @@ import { AutoDj } from './lib/autodj';
 import { Assistant } from './lib/assistant';
 import { Keyboard } from './lib/keybindings';
 import { MidiController } from './lib/midi';
+import { SimpleView } from './ui/simple-view';
 import { DeckView } from './ui/deck-view';
 import { MixerView } from './ui/mixer-view';
 import { FxView, SamplerView } from './ui/fx-view';
 import { LibraryView } from './ui/library-view';
-import { TopBar, Modal, DebugPanel, Toasts, buildSettings, buildAssistant, buildSession } from './ui/panels';
+import {
+  TopBar, Modal, DebugPanel, Toasts,
+  buildSettings, buildAssistant, buildSession, buildHelp,
+} from './ui/panels';
 import { el, button, qs } from './ui/dom';
 import type { DeckId } from './lib/types';
 
@@ -78,12 +82,25 @@ async function run(engine: AudioEngine, store: Store) {
   const modal = new Modal();
   const toasts = new Toasts(dj);
 
+  const setUiMode = (mode: 'simple' | 'performance' | 'advanced') => {
+    store.state.uiMode = mode;
+    document.body.dataset.uiMode = mode;
+    store.notify('mode');
+  };
+
+  // Simple mode is what a new user lands on. The full console is built either
+  // way and simply hidden, so switching between them never interrupts audio.
+  const simpleView = new SimpleView(dj, auto, () => setUiMode('performance'));
+
   const topBar = new TopBar(dj, auto, (panel) => {
     switch (panel) {
       case 'settings': modal.show('Settings', buildSettings(dj, keyboard, midi)); break;
       case 'assistant': modal.show('DJ assistant', buildAssistant(dj, assistant, auto)); break;
       case 'session': modal.show('Sessions', buildSession(dj)); break;
       case 'debug': debugPanel.toggle(); break;
+      case 'help':
+        modal.show('What everything does', buildHelp(dj, () => { setUiMode('simple'); modal.hide(); }));
+        break;
     }
   });
 
@@ -103,6 +120,7 @@ async function run(engine: AudioEngine, store: Store) {
   const app = qs('#app');
   app.append(
     topBar.root,
+    simpleView.root,
     el('main', { class: 'console' }, [
       el('div', { class: 'decks-row' }, [
         deckViews[0].root,
@@ -142,8 +160,12 @@ async function run(engine: AudioEngine, store: Store) {
     const delta = t0 - lastFrame;
     lastFrame = t0;
 
-    for (const view of deckViews) view.renderFrame();
-    mixerView.renderFrame();
+    if (store.state.uiMode === 'simple') {
+      simpleView.renderFrame();
+    } else {
+      for (const view of deckViews) view.renderFrame();
+      mixerView.renderFrame();
+    }
 
     const work = performance.now() - t0;
     // Exponential averages: raw per-frame numbers are far too noisy to read.
@@ -196,7 +218,9 @@ async function run(engine: AudioEngine, store: Store) {
   // Debug handle. The console is entirely local, so exposing it costs nothing
   // and makes the engine inspectable from devtools - `__dj.engine.deck('A')`
   // and friends - which is the same state the debug panel renders.
-  (window as unknown as { __dj: DjConsole }).__dj = dj;
+  const debugHandles = window as unknown as { __dj: DjConsole; __auto: AutoDj };
+  debugHandles.__dj = dj;
+  debugHandles.__auto = auto;
 
   store.toast('Audio engine running', 'success', {
     detail: `${engine.sampleRate} Hz · ${(engine.latency * 1000).toFixed(1)} ms · ` +

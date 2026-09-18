@@ -14,7 +14,12 @@ import type { DeckId, HotCue, Track, Playlist, HistoryEntry } from '../lib/types
 import type { FxId } from '../audio/fx';
 import type { CrossfaderCurve } from '../audio/engine';
 
-export type UiMode = 'performance' | 'advanced';
+/**
+ * 'simple' is the default: one button, plain language, no deck controls.
+ * The other two are the full console, with 'advanced' adding the technical
+ * surface (grid editing, beat jump, routing, debug).
+ */
+export type UiMode = 'simple' | 'performance' | 'advanced';
 export type MixMode = 'manual' | 'assisted' | 'autodj';
 export type KeyStyle = 'camelot' | 'musical' | 'both';
 
@@ -204,7 +209,7 @@ export class Store {
 
     this.state = {
       engineReady: false,
-      uiMode: 'performance',
+      uiMode: 'simple',
       mixMode: 'manual',
       decks,
       crossfader: 0,

@@ -263,6 +263,39 @@ export class SyncEngine {
     return err;
   }
 
+  /**
+   * Adjust a position so that starting there lands the deck in phase with the
+   * master, without needing a correction afterwards.
+   *
+   * Cueing a deck and *then* aligning it does not work: a seek is a message to
+   * the audio thread, so the position has not moved yet when the alignment
+   * runs, and the controller is left pulling in from up to half a beat - which
+   * takes seconds and is audible as the new track sliding into place. Working
+   * out the in-phase start position first makes the deck correct from its very
+   * first sample.
+   *
+   * Only the master's live playhead is read here, so there is no race.
+   */
+  alignedStartPosition(followerId: DeckId, desiredPosition: number): number {
+    const follower = this.decks.get(followerId);
+    const masterId = this.resolveMaster();
+    if (!follower || !masterId || masterId === followerId) return desiredPosition;
+    const master = this.decks.get(masterId)!;
+    if (follower.grid.bpm <= 0 || master.grid.bpm <= 0 || !master.playing) return desiredPosition;
+
+    const masterBeat = beatAt(master.grid, master.position) - master.grid.downbeatOffset;
+    const followerBeat = beatAt(follower.grid, desiredPosition) - follower.grid.downbeatOffset;
+    const err = this.barSync
+      ? barPhaseError(masterBeat, followerBeat)
+      : phaseError(masterBeat, followerBeat);
+
+    const target = followerBeat + err + follower.grid.downbeatOffset;
+    const time = follower.timeAtBeat(target);
+    // Never push the start outside the track just to gain a fraction of a beat.
+    if (time < 0 || time > follower.duration) return desiredPosition;
+    return time;
+  }
+
   /** Nudge a deck by a fraction of a beat without disturbing sync tempo. */
   nudgeBeats(id: DeckId, beats: number) {
     const deck = this.decks.get(id);

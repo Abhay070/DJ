@@ -84,8 +84,19 @@ export class DeckView {
       onSeek: (delta) => deck.seek(deck.position + delta),
     });
 
-    this.playBtn = button('PLAY', { class: 'transport-btn play-btn', onclick: () => dj.togglePlay(id) });
-    this.syncBtn = button('SYNC', { class: 'transport-btn sync-btn', onclick: () => dj.toggleSync(id) });
+    this.playBtn = button('PLAY', {
+      class: 'transport-btn play-btn',
+      title: 'Start or stop this deck',
+      onclick: () => dj.togglePlay(id),
+    });
+    this.syncBtn = button('SYNC', {
+      class: 'transport-btn sync-btn',
+      title:
+        'Match this deck to the other one: same speed, beats landing together. ' +
+        'It lights up only once the beats are actually locked - the PHASE number ' +
+        'below shows how far apart they really are.',
+      onclick: () => dj.toggleSync(id),
+    });
 
     this.tempoFader = fader({
       min: -1, max: 1,
@@ -124,7 +135,7 @@ export class DeckView {
 
     const readouts = el('div', { class: 'deck-readouts' }, [
       el('div', { class: 'readout readout-time' }, [this.timeEl, this.remainEl]),
-      el('div', { class: 'readout readout-bpm' }, [
+      el('div', { class: 'readout readout-bpm', title: 'Speed, in beats per minute. "orig" is the track\'s own speed before you changed it.' }, [
         this.bpmEl,
         el('div', { class: 'readout-sub' }, [this.originalBpmEl, this.bpmConfidenceEl]),
       ]),
@@ -132,13 +143,16 @@ export class DeckView {
         this.keyEl,
         el('span', { class: 'readout-label', text: 'KEY' }),
       ]),
-      el('div', { class: 'readout readout-pitch' }, [
+      el('div', { class: 'readout readout-pitch', title: 'How much faster or slower than normal this deck is playing.' }, [
         this.pitchEl,
         el('span', { class: 'readout-label', text: 'PITCH' }),
       ]),
     ]);
 
-    const phase = el('div', { class: 'phase-meter', title: 'Phase difference against the master deck' }, [
+    const phase = el('div', {
+      class: 'phase-meter',
+      title: 'How far this deck\'s beats are from the other deck\'s, in milliseconds. Centre is perfect.',
+    }, [
       el('span', { class: 'phase-label', text: 'PHASE' }),
       el('div', { class: 'phase-bar' }, [el('div', { class: 'phase-centre' }), this.phaseBar]),
       this.phaseText,
@@ -147,6 +161,9 @@ export class DeckView {
     const transport = el('div', { class: 'transport' }, [
       button('CUE', {
         class: 'transport-btn cue-btn',
+        title:
+          'Set the spot this track starts from. While stopped, press to set it here. ' +
+          'While playing, press to jump back to it. Hold to preview from there.',
         onpointerdown: (e: Event) => {
           e.preventDefault();
           const deck = dj.engine.deck(id);
@@ -164,10 +181,14 @@ export class DeckView {
     ]);
 
     const toggles = el('div', { class: 'deck-toggles' }, [
-      this.toggle('KEY LOCK', () => dj.store.deck(id).keyLock, (v) => dj.setKeyLock(id, v)),
-      this.toggle('QUANT', () => dj.store.deck(id).quantize, (v) => dj.setQuantize(id, v)),
-      this.toggle('SLIP', () => dj.store.deck(id).slip, (v) => dj.setSlip(id, v)),
-      this.toggle('REV', () => dj.store.deck(id).reverse, (v) => dj.setReverse(id, v)),
+      this.toggle('KEY LOCK', () => dj.store.deck(id).keyLock, (v) => dj.setKeyLock(id, v),
+        'Keeps voices sounding normal when you change the speed. Best left on.'),
+      this.toggle('QUANT', () => dj.store.deck(id).quantize, (v) => dj.setQuantize(id, v),
+        'Snaps cues and loops to the nearest beat, so you cannot land slightly off.'),
+      this.toggle('SLIP', () => dj.store.deck(id).slip, (v) => dj.setSlip(id, v),
+        'The track keeps running underneath whatever you do. Let go and it is where it should be.'),
+      this.toggle('REV', () => dj.store.deck(id).reverse, (v) => dj.setReverse(id, v),
+        'Play backwards.'),
     ]);
 
     // ---- hot cues ----------------------------------------------------------
@@ -317,9 +338,12 @@ export class DeckView {
     ]);
   }
 
-  private toggle(label: string, get: () => boolean, set: (v: boolean) => void): HTMLButtonElement {
+  private toggle(
+    label: string, get: () => boolean, set: (v: boolean) => void, help?: string,
+  ): HTMLButtonElement {
     const btn = button(label, {
       class: 'toggle-btn',
+      title: help,
       onclick: () => { set(!get()); btn.classList.toggle('active', get()); },
     });
     btn.classList.toggle('active', get());

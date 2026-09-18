@@ -803,3 +803,180 @@ body[data-ui-mode='performance'] .advanced-only { display: none; }
 @media (prefers-reduced-motion: reduce) {
   button { transition: none; }
 }
+
+/* ------------------------------------------------------------ simple mode */
+
+/* Simple mode and the console are both mounted; only one is shown, so
+   switching between them never interrupts playback. */
+body[data-ui-mode='simple'] .console,
+body[data-ui-mode='simple'] .statusbar { display: none; }
+body:not([data-ui-mode='simple']) .simple { display: none; }
+
+.simple {
+  flex: 1;
+  display: grid;
+  place-items: start center;
+  padding: 28px 16px 48px;
+  overflow-y: auto;
+}
+.simple.drop-target .simple-card { border-color: var(--accent); background: #101a22; }
+
+.simple-card {
+  width: min(680px, 100%);
+  background: var(--bg-panel);
+  border: 1px solid var(--line);
+  border-radius: 12px;
+  padding: 28px 30px;
+  display: flex;
+  flex-direction: column;
+  gap: 26px;
+}
+
+.simple-step { display: flex; gap: 16px; align-items: flex-start; }
+.step-number {
+  flex-shrink: 0;
+  width: 26px;
+  height: 26px;
+  border-radius: 50%;
+  display: grid;
+  place-items: center;
+  background: var(--accent-dim);
+  color: #eaf7ff;
+  font-size: 13px;
+  font-weight: 700;
+}
+.step-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 10px; }
+.step-body h2 { margin: 0; font-size: 17px; font-weight: 600; letter-spacing: 0.01em; }
+.step-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+
+.simple-hint { margin: 0; color: var(--text-dim); font-size: 12px; line-height: 1.6; }
+
+.simple-count { margin: 0; font-size: 12px; color: var(--text-faint); }
+.simple-count.ready { color: var(--green); }
+.simple-count.working { color: var(--amber); }
+
+/* The one button. Deliberately the largest thing on the screen. */
+.big-button {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 12px;
+  width: 100%;
+  padding: 20px;
+  font-size: 17px;
+  font-weight: 600;
+  letter-spacing: 0.02em;
+  background: linear-gradient(180deg, #3a9fcc, #2b7a9e);
+  border: 1px solid #4fb5e0;
+  border-radius: 10px;
+  color: #f2fbff;
+}
+.big-button:hover:not(:disabled) { background: linear-gradient(180deg, #46b0de, #3189ae); }
+.big-button:disabled { opacity: 0.4; cursor: not-allowed; }
+.big-icon { font-size: 20px; line-height: 1; }
+
+.simple-status {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 20px;
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+}
+.simple-headline { margin: 0; font-size: 15px; font-weight: 600; }
+.simple-detail { margin: 0; font-size: 13px; color: var(--text-dim); line-height: 1.6; min-height: 2.6em; }
+
+.now-playing { display: flex; flex-direction: column; gap: 1px; }
+.np-title { font-size: 14px; font-weight: 600; }
+.np-artist { font-size: 12px; color: var(--text-dim); }
+
+.simple-progress {
+  height: 6px;
+  background: var(--bg-sunken);
+  border-radius: 3px;
+  overflow: hidden;
+  margin-top: 4px;
+}
+.simple-progress-fill { height: 100%; background: linear-gradient(90deg, var(--accent-dim), var(--accent)); width: 0; }
+.simple-progress-row { display: flex; justify-content: space-between; gap: 12px; }
+.simple-progress-time { font-family: var(--mono); font-size: 11px; color: var(--text-faint); }
+.up-next { font-size: 11px; color: var(--amber); text-align: right; }
+
+.simple-controls { display: none; gap: 8px; flex-wrap: wrap; margin-top: 6px; }
+.simple-controls.visible { display: flex; }
+
+.simple-extras {
+  border-top: 1px solid var(--line-soft);
+  padding-top: 18px;
+  display: flex;
+  flex-direction: column;
+  gap: 14px;
+}
+.simple-volume-row { display: flex; align-items: center; gap: 12px; font-size: 12px; color: var(--text-dim); }
+.simple-volume { flex: 1; accent-color: var(--accent); }
+
+.simple-queue { display: flex; flex-direction: column; gap: 3px; }
+.queue-label { font-size: 9px; letter-spacing: 0.14em; color: var(--text-faint); text-transform: uppercase; }
+.queue-item { font-size: 12px; color: var(--text-dim); padding: 2px 0; }
+.queue-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; display: block; }
+
+.link-btn {
+  align-self: flex-start;
+  background: none;
+  border: none;
+  color: var(--accent);
+  text-decoration: underline;
+  padding: 2px 0;
+  font-size: 12px;
+}
+.link-btn:hover { background: none; color: #7fd3ff; }
+
+/* In simple mode the top bar keeps only what a beginner needs. */
+body[data-ui-mode='simple'] .master-clock,
+body[data-ui-mode='simple'] .mode-select,
+body[data-ui-mode='simple'] .stat { display: none; }
+
+@media (max-width: 560px) {
+  .simple-card { padding: 20px 18px; }
+  .simple-step { gap: 12px; }
+}
+
+/* --------------------------------------------------------------- help panel */
+
+.help { display: flex; flex-direction: column; gap: 22px; }
+.help-intro { margin: 0; color: var(--text-dim); font-size: 13px; }
+.help-group h3 {
+  margin: 0 0 6px;
+  font-size: 12px;
+  letter-spacing: 0.12em;
+  color: var(--accent);
+  text-transform: uppercase;
+}
+.help-blurb {
+  margin: 0 0 12px;
+  font-size: 13px;
+  line-height: 1.65;
+  color: var(--text);
+  border-left: 2px solid var(--accent-dim);
+  padding-left: 12px;
+}
+.help-entry {
+  display: grid;
+  grid-template-columns: 170px 1fr;
+  gap: 4px 14px;
+  padding: 7px 0;
+  border-bottom: 1px solid var(--line-soft);
+  font-size: 12.5px;
+  line-height: 1.55;
+}
+.help-name { font-weight: 600; color: var(--text); }
+.help-what { color: var(--text-dim); }
+/* The "why you'd want it" line sits under the explanation, indented. */
+.help-why { grid-column: 2; color: var(--text-faint); font-style: italic; font-size: 11.5px; }
+
+/* The console-only panels are noise for someone in simple mode. */
+body[data-ui-mode='simple'] .console-only { display: none; }
+
+@media (max-width: 620px) {
+  .help-entry { grid-template-columns: 1fr; }
+  .help-why { grid-column: 1; }
+}
