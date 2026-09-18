@@ -1,0 +1,34 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='6' fill='%230b0d12'/%3E%3Ccircle cx='16' cy='16' r='10' fill='none' stroke='%234fc3f7' stroke-width='2'/%3E%3Ccircle cx='16' cy='16' r='3' fill='%234fc3f7'/%3E%3Cpath d='M16 6 v4' stroke='%23ffc447' stroke-width='2' stroke-linecap='round'/%3E%3C/svg%3E" />
+    <title>DJ Console</title>
+    <meta name="description" content="A local-first DJ console with automatic beat analysis and true tempo and phase sync." />
+  </head>
+  <body data-ui-mode="performance">
+    <div id="splash">
+      <div class="splash-card">
+        <h1>DJ Console</h1>
+        <p class="splash-sub">Local-first. Your music never leaves this machine.</p>
+        <ul class="splash-points">
+          <li>Two decks with sample-accurate playback, key lock and real time-stretching</li>
+          <li>Automatic BPM, beat grid, key, energy and structure analysis</li>
+          <li>Tempo and phase sync that holds, not a one-off nudge</li>
+          <li>EQ, filters, FX rack, sampler, looping, hot cues and master recording</li>
+        </ul>
+        <button id="start-btn" type="button" class="primary-btn large">Start the audio engine</button>
+        <p class="splash-note">
+          Browsers only allow audio to start after a click. Nothing is uploaded and
+          no network requests are made once the page has loaded.
+        </p>
+        <p id="start-error" class="start-error hidden"></p>
+      </div>
+    </div>
+
+    <div id="app" class="hidden"></div>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>
